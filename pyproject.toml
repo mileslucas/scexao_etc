@@ -1,0 +1,42 @@
+[build-system]
+requires = ["setuptools", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "scexao_etc"
+description = "SCExAO Exposure Time Calculator"
+readme = "README.md"
+license = {file = "LICENSE"}
+authors = [{name = "Miles Lucas", email = "mdlucas@hawaii.edu"}]
+requires-python = ">=3.7"
+dynamic = ["version"]
+dependencies = [
+    "astropy",
+    "click",
+    "pandas",
+    "numpy",
+    "synphot",
+    "photutils",
+    "sep",
+]
+
+[project.urls]
+repository = "https://github.com/scexao-org/scexao_etc"
+
+[project.optional-dependencies]
+dev = [
+    "autoflake",
+    "black",
+    "isort"
+]
+
+
+[tool.setuptools.dynamic]
+version = {attr = "scexao_etc.__version__"}
+
+[tool.black]
+line-length = 100
+
+[tool.isort]
+profile = "black"
+multi_line_output = 3
