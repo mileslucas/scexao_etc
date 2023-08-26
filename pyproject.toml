@@ -18,6 +18,8 @@ dependencies = [
     "synphot",
     "photutils",
     "sep",
+    "flask",
+    "plotly"
 ]
 
 [project.urls]
@@ -30,6 +32,8 @@ dev = [
     "isort"
 ]
 
+[project.scripts]
+scexao_etc = "scexao_etc.app:main"
 
 [tool.setuptools.dynamic]
 version = {attr = "scexao_etc.__version__"}
