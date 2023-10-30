@@ -13,13 +13,15 @@ dynamic = ["version"]
 dependencies = [
     "astropy",
     "click",
+    "hcipy",
     "pandas",
     "numpy",
     "synphot",
     "photutils",
     "sep",
-    "flask",
-    "plotly"
+    "dash",
+    "streamlit",
+    "pydantic"
 ]
 
 [project.urls]
