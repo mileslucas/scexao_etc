@@ -1,10 +1,6 @@
-from pathlib import Path
-
 import hcipy as hp
 import numpy as np
-from astropy.io import fits
 from synphot.utils import generate_wavelengths
-
 
 ## constants
 PUPIL_DIAMETER = 7.95  # m
@@ -23,8 +19,10 @@ PIXEL_SCALE = 6  # mas / pix
 # -------------------------------------------------------------------------------------------------------------
 # -------------------------------------------------------------------------------------------------------------
 
+
 def field_combine(field1, field2):
     return lambda grid: field1(grid) * field2(grid)
+
 
 def generate_pupil_field(
     n: int = 256,

@@ -1,4 +1,3 @@
-from pathlib import Path
 from typing import Annotated, ClassVar, Literal, Optional
 
 import numpy as np
@@ -7,8 +6,6 @@ from annotated_types import Ge, Gt
 from pydantic import BaseModel
 
 from .filters import VAMP_FILTERS, VAMP_ZEROPOINTS
-
-BASE_DIR = Path("/Users/mileslucas/dev/websites/scexao_etc/data")
 
 
 class Instrument(BaseModel):
@@ -43,8 +40,8 @@ class VAMPIRES(Instrument):
         "OPEN": 1,
         "PBS": 0.7964 / 2,
         "NPBS": 0.8931 / 2,
-        "ND10": 10**(-1.00),
-        "ND25": 10**(-2.33),
+        "ND10": 10 ** (-1.00),
+        "ND25": 10 ** (-2.33),
     }
     FILTERS: ClassVar[list] = VAMP_FILTERS
     ZEROPOINTS: ClassVar[list] = VAMP_ZEROPOINTS
@@ -96,7 +93,6 @@ class VAMPIRES(Instrument):
         )
 
     def convert_data(self, data, clip=True):
-
         data_adu = super().convert_data(data)
         if clip:
             return np.where(data_adu > 2**16 - 1, np.nan, data_adu).astype("f4")

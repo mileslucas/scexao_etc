@@ -20,7 +20,7 @@ from synphot.units import VEGAMAG
 
 from scexao_etc.filters import FILTERS, get_average_extinction
 from scexao_etc.instruments import INSTRUMENTS
-from scexao_etc.models import PICKLES_MAP, TYPES, VEGASPEC, color_correction, load_pickles
+from scexao_etc.models import PICKLES_MAP, TYPES, VEGASPEC, load_pickles
 from scexao_etc.psf import get_psf
 
 

@@ -1,14 +1,14 @@
 from pathlib import Path
 from typing import Any, Iterable
 
-from . import paths
-
 import astropy.units as u
 import numpy as np
 import pandas as pd
 from astropy.io import fits
 from astropy.table import QTable
 from synphot import SpectralElement
+
+from . import paths
 
 
 def load_vampires_filter(name: str, csv_path=paths.datadir / "vampires_filters.csv"):

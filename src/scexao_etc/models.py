@@ -1,21 +1,20 @@
-from pathlib import Path
-
 import astropy.units as u
 from astropy.io import fits
 from synphot import Empirical1D, Observation, SourceSpectrum, SpectralElement
 from synphot.units import VEGAMAG
 
-BASE_DIR = Path("/Users/mileslucas/dev/python/scexao_etc/data/pickles_uvk")
+from . import paths
+
 TYPES = ("V", "IV", "III", "II", "I")
 
 
-def prepare_pickles_dict(base_dir=BASE_DIR):
-    tbl = fits.getdata(BASE_DIR / "pickles_uk.fits")
+def prepare_pickles_dict(base_dir=paths.datadir / "pickles_uvk"):
+    tbl = fits.getdata(base_dir / "pickles_uk.fits")
     fnames = (base_dir / f"{fname}.fits" for fname in tbl["FILENAME"])
     return dict(zip(tbl["SPTYPE"], fnames))
 
 
-PICKLES_MAP = prepare_pickles_dict(BASE_DIR)
+PICKLES_MAP = prepare_pickles_dict()
 VEGASPEC = SourceSpectrum.from_vega()
 
 
