@@ -1,173 +1,49 @@
-from dash import Dash, html, dcc, callback, Output, Input
-import plotly.express as px
-import pandas as pd
-import plotly.graph_objects as go
-
-from .instruments import INSTRUMENTS
-from .models import PICKLES_MAP, VEGASPEC, load_pickles, color_correction, TYPES
-from .filters import FILTERS, get_average_extinction
-from .psf import get_psf
-
 import re
+import sys
+from pathlib import Path
+from typing import Literal
 
+import astropy.units as u
+import numpy as np
+
+# import streamlit_pydantic as sp
+import pandas as pd
+import plotly.express as px
+import plotly.graph_objects as go
+import sep
+import streamlit as st
+import streamlit.web.cli as stcli
+from pydantic import BaseModel
 from synphot import Observation
 from synphot.models import get_waveset
 from synphot.units import VEGAMAG
-from synphot.utils import generate_wavelengths
-import astropy.units as u
-import numpy as np
-import sep
 
-app = Dash("scexao_etc")
-
-app.layout = html.Div(
-    [
-        html.H1(children="SCExAO Exposure Time Calculator", style={"textAlign": "center"}),
-        html.Hr(),
-        html.H2(children="Instrument"),
-        dcc.RadioItems(list(INSTRUMENTS.keys()), "VAMPIRES", id="instrument"),
-        html.Hr(),
-        html.H2(children="Target Information"),
-        html.Div(
-            children=dcc.RadioItems(
-                ["Point source", "Extended object"],
-                "Point source",
-                id="source-type",
-            )
-        ),
-        html.Div(
-            children=[
-                "Object class",
-                dcc.RadioItems(list(TYPES), "V", id="star-type"),
-            ]
-        ),
-        html.Div(id="spectral-type-dropdown"),
-        html.Div(
-            children=[
-                "Input filter:",
-                dcc.Dropdown(
-                    list(FILTERS.keys()),
-                    "V",
-                    id="source-filter",
-                ),
-            ]
-        ),
-        html.Div(id="magnitude-setup"),
-        html.Div(
-            children=[
-                "Airmass: ",
-                dcc.Input(
-                    value=1,
-                    type="number",
-                    id="airmass",
-                ),
-            ]
-        ),
-        html.Div(
-            children=[
-                "Seeing: ",
-                dcc.Input(
-                    value=0.02,
-                    type="number",
-                    id="seeing",
-                ),
-                ' "',
-            ]
-        ),
-        html.Hr(),
-        html.H2(children="Instrument Setup"),
-        html.Div(id="instrument-setup"),
-        html.Hr(),
-        html.H2(children="Exposure time calculations"),
-        html.Div(id="results"),
-        html.Hr(),
-        html.H2(children="Plots"),
-        dcc.Graph(id="psf-plot", style={"width": "50vh"}),
-        dcc.Graph(id="spectral-plot", style={"width": "50vh"}),
-        html.Div(children=[]),
-    ]
-)
+from scexao_etc.filters import FILTERS, get_average_extinction
+from scexao_etc.instruments import INSTRUMENTS
+from scexao_etc.models import PICKLES_MAP, TYPES, VEGASPEC, color_correction, load_pickles
+from scexao_etc.psf import get_psf
 
 
-@callback(Output("spectral-type-dropdown", "children"), Input("star-type", "value"))
-def get_spectral_options(startype):
-    re_match = re.compile(f"[0-9]{startype}")
-    sublist = list(filter(lambda f: re_match.search(f), PICKLES_MAP.keys()))
-    default = sublist[0]
-    return [
-        "Spectral type (uses Pickles stellar models):",
-        dcc.Dropdown(sublist, default, id="spectral-type"),
-    ]
+class TargetOptions(BaseModel):
+    sptype: str
+    filter: str
+    mag: float
+    mag_sys: Literal["Vega", "AB"]
+    airmass: float = 1
 
 
-@callback(Output("instrument-setup", "children"), Input("instrument", "value"))
-def get_instrument_options(instrument):
-    return INSTRUMENTS[instrument].get_options()
-
-
-@callback(Output("magnitude-setup", "children"), Input("source-type", "value"))
-def get_magnitude_options(source_type):
-    default = [
-        html.Div(
-            children=[
-                "Brightness: ",
-                dcc.Input(placeholder="magnitude", type="number", id="source-mag", value=0),
-                " mag",
-            ]
-        ),
-    ]
-    if source_type.lower() == "point source":
-        return default
-    elif source_type.lower() == "extended object":
-        default.extend(
-            [
-                html.Div(
-                    children=[
-                        "Surface Brightness: ",
-                        dcc.Input(
-                            placeholder="surface brightness",
-                            type="number",
-                            id="surf-mag",
-                            value=0,
-                        ),
-                        " mag / sq. arcsec",
-                    ]
-                ),
-                html.Div(
-                    children=[
-                        "Extent: ",
-                        dcc.Input(placeholder="extent", type="number", id="surface-area", value=1),
-                        " sq. arcsec",
-                    ]
-                ),
-            ]
-        )
-        return default
-
-
-@callback(
-    Output("spectral-plot", "figure"),
-    Input("spectral-type", "value"),
-    Input("source-mag", "value"),
-    Input("source-filter", "value"),
-    Input("instrument", "value"),
-    Input("inst-filter", "value"),
-)
-def update_spectrum_plot(sptype, mag, srcfilt, inst, instfilt):
+def update_spectrum_plot(sptype, mag, magsys, srcfilt, inst, inst_filts):
     src_elem = FILTERS[srcfilt]
     inst = INSTRUMENTS[inst]
-    inst_elem = inst.FILTERS[instfilt]
     sp = load_pickles(sptype)
-    sp_norm = sp.normalize(mag * VEGAMAG, src_elem, vegaspec=VEGASPEC, force="extrap")
+    if magsys == "Vega":
+        unit = VEGAMAG
+    elif magsys == "AB":
+        unit = u.ABmag
+    sp_norm = sp.normalize(mag * unit, src_elem, vegaspec=VEGASPEC, force="extrap")
     waves = get_waveset(sp_norm.model)
     obs_source = Observation(sp_norm, src_elem, waves, force="extrap").as_spectrum()
-    obs_inst = Observation(sp_norm, inst_elem, waves, force="extrap").as_spectrum()
     waves_nm = waves / 10
-
-    filt1waves = get_waveset(src_elem.model)
-    filt2waves = get_waveset(inst_elem.model)
-    min_wave = min(filt1waves.min(), filt2waves.min()) / 10 - 100
-    max_wave = max(filt1waves.max(), filt2waves.max()) / 10 + 100
 
     fig = go.Figure()
     fig.add_trace(
@@ -180,14 +56,31 @@ def update_spectrum_plot(sptype, mag, srcfilt, inst, instfilt):
             x=waves_nm, y=obs_source(waves, u.Jy).value, mode="lines", name=f"{srcfilt} (target)"
         )
     )
-    fig.add_trace(
-        go.Scatter(
-            x=waves_nm, y=obs_inst(waves, u.Jy).value, mode="lines", name=f"{instfilt} (inst)"
+
+    filt1waves = get_waveset(src_elem.model)
+    min_wave = np.inf
+    max_wave = -np.inf
+    for inst_filt in inst_filts:
+        inst_elem = inst.FILTERS[inst_filt]
+        filt2waves = get_waveset(inst_elem.model)
+        min_wave = min(min(filt1waves.min(), filt2waves.min()) / 10 - 100, min_wave)
+        max_wave = max(max(filt1waves.max(), filt2waves.max()) / 10 + 100, max_wave)
+        obs_inst = Observation(sp_norm, inst_elem, waves, force="extrap").as_spectrum()
+
+        fig.add_trace(
+            go.Scatter(
+                x=waves_nm, y=obs_inst(waves, u.Jy).value, mode="lines", name=f"{inst_filt} (inst)"
+            )
         )
-    )
 
     fig.update_layout(
-        legend_orientation="v",
+        legend_orientation="h",
+        legend_yanchor="bottom",
+        legend_y=1.02,
+        legend_xanchor="center",
+        legend_x=0.5,
+        # autosize=True,
+        # width=500
     )
     fig.update_xaxes(title_text="wavelength (nm)", range=[min_wave, max_wave])
     fig.update_yaxes(title_text="flux (Jy)")
@@ -195,176 +88,325 @@ def update_spectrum_plot(sptype, mag, srcfilt, inst, instfilt):
     return fig
 
 
-@callback(
-    Output("results", "children"),
-    Output("psf-plot", "figure"),
-    Input("spectral-type", "value"),
-    Input("source-type", "value"),
-    Input("source-mag", "value"),
-    Input("source-filter", "value"),
-    Input("instrument", "value"),
-    Input("inst-readout-mode", "value"),
-    Input("inst-filter", "value"),
-    Input("inst-exptime", "value"),
-    Input("inst-bs", "value"),
-    Input("airmass", "value"),
-    Input("seeing", "value"),
-)
+# def get_counts(input_spec, src_elem, inst, inst_filt):
+#     inst_elem = inst.FILTERS[inst_filt]
+#     ## step 1 get color correction
+#     color_corr = color_correction(input_spec, src_elem, inst_elem).value
+#     ## extinction
+#     ext_coeff = get_average_extinction(inst_elem)
+#     total_ext = ext_coeff * airmass
+
+#     ## don't use color correction because we're still using source filter
+#     # as reference here
+#     input_mag = mag + total_ext.value
+#     sp_norm = input_spec.normalize(input_mag * unit, src_elem, vegaspec=VEGASPEC, force="extrap")
+#     waves = get_waveset(sp_norm.model)
+#     obs_inst = Observation(sp_norm, inst_elem, waves, force="extrap")
+#     obs_mag = obs_inst.effstim(unit, vegaspec=VEGASPEC).value
+
+#     ## apply zeropoint
+#     zp_mag = 2.5 * np.log10(inst.ZEROPOINTS[inst_filt])
+#     inst_mag = obs_mag - zp_mag - 2.5 * np.log10(strehl)
+#     inst_counts = 10 ** (-0.4 * inst_mag)
+#     if use_bs:
+#         inst_counts *= 0.5
+
+#     ## synphot counts
+#     area = 40.3 * u.m**2
+#     synphot_counts = obs_inst.countrate(area=area).value
+
+
 def calculate_results(
-    sptype, sourcetype, mag, srcfilt, inst, readmode, instfilt, exptime, bs, airmass, seeing
+    sptype, sourcetype, mag, magsys, srcfilt, inst, exptime, airmass, strehl, area=None
 ):
     src_elem = FILTERS[srcfilt]
-    inst = INSTRUMENTS[inst]
-    inst_elem = inst.FILTERS[instfilt]
+    if sourcetype == "Extended Object":
+        px_size = 2.5 * np.log10(inst.pxarea)
+        px_size = 2.5 * np.log10(area)
+        mag = mag - px_size
     sp = load_pickles(sptype)
-    ## step 1 get color correction
-    color_corr = color_correction(sp, src_elem, inst_elem).value
-    ## extinction
-    ext_coeff = get_average_extinction(inst_elem)
-    total_ext = ext_coeff * airmass
+    tbls = []
+    figs = []
+    if magsys == "Vega":
+        unit = VEGAMAG
+    elif magsys == "AB":
+        unit = u.ABmag
+    for inst_filt, inst_elem in inst.filters.items():
+        ## step 1 get color correction
+        # color_corr = color_correction(sp, inst_elem, src_elem).value
+        ## extinction
+        ext_coeff = get_average_extinction(inst_elem)
+        total_ext = ext_coeff * airmass
 
-    ## don't use color correction because we're still using source filter
-    # as reference here
-    input_mag = mag + total_ext.value
-    sp_norm = sp.normalize(input_mag * VEGAMAG, src_elem, vegaspec=VEGASPEC, force="extrap")
-    waves = get_waveset(sp_norm.model)
-    obs_inst = Observation(sp_norm, inst_elem, waves, force="extrap")
-    obs_mag = obs_inst.effstim(VEGAMAG, vegaspec=VEGASPEC).value
+        ## don't applly color correction here because we're still using source filter
+        # as reference here
+        input_mag = mag + total_ext
+        sp_norm = sp.normalize(input_mag * unit, src_elem, vegaspec=VEGASPEC, force="extrap")
+        waves = get_waveset(sp_norm.model)
+        obs_inst = Observation(sp_norm, inst_elem, waves, force="extrap")
+        obs_mag = obs_inst.effstim(unit, vegaspec=VEGASPEC).value
+        color_corr = obs_mag - input_mag
 
-    ## apply zeropoint
-    zp = 2.5 * np.log10(inst.ZEROPOINTS[instfilt])
-    inst_mag = obs_mag - zp
-    inst_counts = 10 ** (-0.4 * inst_mag)
-    if bs.upper() in ("PBS", "NPBS"):
-        inst_counts *= 0.5
+        ## apply zeropoint
+        zp = 2.5 * np.log10(inst.ZEROPOINTS[inst_filt])
+        inst_mag = obs_mag - zp
+        inst_counts = 10 ** (-0.4 * inst_mag) * inst.throughput
 
-    ## synphot counts
-    area = 40.3 * u.m**2
-    synphot_counts = obs_inst.countrate(area=area).value
+        ## synphot counts
+        area = 40.3 * u.m**2
+        synphot_counts = obs_inst.countrate(area=area).value
 
-    rn = inst.rn[readmode]
-    total_noise = np.sqrt(rn**2 + inst.dt * exptime)
-    total_signal = inst_counts * exptime
+        rn = inst.readnoise
+        dc = inst.dark_current
+        total_noise = np.sqrt(rn**2 + dc * exptime)
+        total_signal = inst_counts * exptime
+        psf, noisy_psf = get_psf(inst_elem, inst_counts, exptime, rn=rn, dc=dc)
+        # psf *= strehl
+        # noisy_psf *= strehl
 
-    psf, noisy_psf = get_psf(inst_elem, inst_counts, exptime, rn=rn, dc=inst.dt, seeing=seeing)
-    # psf *= strehl
-    # noisy_psf *= strehl
+        peak_signal = np.nanmax(noisy_psf) * strehl
+        # strehl = peak_signal / np.nanmax(psf)
 
-    peak_signal = noisy_psf.max()
-    strehl = peak_signal / psf.max()
-    # aper_rad = 0.5
-    # aper_rad_px = 0.5 * 1e3 / inst.pxscale
-    aper_rad_px, _ = sep.flux_radius(noisy_psf, [267.5], [267.5], [267.5], frac=0.95)
-    best_rad = 0
-    best_snr = -1
-    for r in np.arange(0.05, 1.5, 0.05):
-        r_px = r * 1e3 / inst.pxscale
+        # lam = inst_elem.avgwave().to(u.nm).value
+        # r0 = fried_param(lam, seeing=0.6, airmass=airmass)
+        # L0 = 46
+        # fwhm = Fiq(lam=lam, seeing=seeing, airmass=airmass, L0=L0)
+
+        # strehl
+        # aper_rad = 0.5
+        aper_rad_px = 4
+        ctr = np.array(noisy_psf.shape[-2:]) / 2 - 0.5
+        # aper_rad_px, _ = sep.flux_radius(noisy_psf, [ctr[0]], [ctr[1]], [np.min(ctr)], frac=0.95)
+        # best_rad = 0
+        # best_snr = -1
+        # for r in np.arange(0.05, 1.5, 0.05):
+        #     r_px = r / inst.pxscale
+        #     aper_sum, aper_sum_err, _ = sep.sum_circle(
+        #         noisy_psf, [ctr[0]], [ctr[1]], r_px, err=total_noise, gain=1
+        #     )
+        #     snr = aper_sum / aper_sum_err
+        #     if snr > best_snr:
+        #         best_snr = snr
+        #         best_rad = r
+
+        # aper_rad = best_rad
+        # aper_rad_px = best_rad / inst.pxscale
         aper_sum, aper_sum_err, _ = sep.sum_circle(
-            noisy_psf, [267.5], [267.5], r_px, err=total_noise, gain=1
+            noisy_psf, [ctr[0]], [ctr[1]], aper_rad_px, err=total_noise, gain=1
         )
-        snr = aper_sum / aper_sum_err
-        if snr > best_snr:
-            best_snr = snr
-            best_rad = r
+        snr = aper_sum[0] / aper_sum_err[0]
 
-    aper_rad = best_rad
-    aper_rad_px = best_rad * 1e3 / inst.pxscale
-    aper_sum, aper_sum_err, _ = sep.sum_circle(
-        noisy_psf, [267.5], [267.5], aper_rad_px, err=total_noise, gain=1
-    )
-    snr = aper_sum[0] / aper_sum_err[0] / 0.95
-
-    ## go as fast as possible while having at least ~2000 adu
-    ratio = peak_signal / exptime
-    suggested_exptime = 400 / ratio
-    max_time = 6100 / ratio
-    if readmode.upper() == "FAST":
+        ## go as fast as possible while having at least ~2000 adu
+        ratio = peak_signal / exptime
+        suggested_exptime = 400 / ratio
+        max_time = 6100 / ratio
         suggested_exptime = np.clip(suggested_exptime, 1 / 254, max_time)
-    elif readmode.upper() == "SLOW":
-        suggested_exptime = np.clip(suggested_exptime, 1 / 10, max_time)
 
-    keys = [
-        "Source mag",
-        "Color correction",
-        "Extinction coeff",
-        "Total extinction",
-        "Observed mag",
-        "Zero point",
-        "Aperture area",
-        "Counts at telescope",
-        "System transmission",
-        "Counts at detector",
-        "RMS Read noise",
-        "Dark current",
-        "Total integrated signal",
-        "Total noise",
-        "Peak signal",
-        "Strehl",
-        "Aperture radius",
-        "Aperture sum",
-        "Aperture noise",
-        "Aperture S/N",
-        "Suggested exptime",
-    ]
-    vals = [
-        f"{mag:4.02f}",
-        f"{color_corr:4.02f}",
-        f"{ext_coeff:4.02f}",
-        f"{total_ext:4.02f}",
-        f"{obs_mag:4.02f}",
-        f"{zp:4.02f}",
-        f"{area.to(u.m**2).value:4.02f}",
-        f"{synphot_counts:4.02e}",
-        f"{inst_counts / synphot_counts:4.03f}",
-        f"{inst_counts:4.02e}",
-        f"{rn:4.02f}",
-        f"{inst.dt:3.01e}",
-        f"{total_signal:3.01e}",
-        f"{total_noise:3.01e}",
-        f"{peak_signal:3.01e}",
-        f"{np.clip(strehl, 0, 1):3.02f}",
-        f'{aper_rad:5.01f}" ({aper_rad_px:3.0f} px)',
-        f"{aper_sum[0] / 0.95:3.01e}",
-        f"{aper_sum_err[0]:3.01e}",
-        f"{snr:6.0f}",
-        f"{suggested_exptime:3.01e}",
-    ]
-    units = [
-        "mag",
-        f"mag ({instfilt} - {srcfilt})",
-        "mag / airmass",
-        "mag",
-        "mag",
-        "mag",
-        "m^2",
-        "photon / s",
-        " (estimated)",
-        "e- / s",
-        "e- / px",
-        "e- / s / px",
-        "e-",
-        "e- / px",
-        f"e-{'' if peak_signal < 6870 else ' SATURATING'}",
-        "",
-        "",
-        "e-",
-        "e-",
-        "",
-        "s",
-    ]
-    pretty_keys = [f"{k} {'.'*(50 - len(k))}" for k in keys]
-    lines = [f"{k} {v} {u}" for k, v, u in zip(pretty_keys, vals, units)]
-    results = [html.Div(children=l) for l in lines]
+        saturating = peak_signal > 6870
+        if saturating:
+            st.toast(f":red[Peak counts are saturating for {inst_filt} filter]")
 
-    noisy_psf_adu = (noisy_psf / inst.gain[readmode] + 200).astype("uint16")
+        keys = [
+            "Source mag",
+            "Color correction",
+            "Extinction coeff",
+            "Total extinction",
+            "Observed mag",
+            "Zero point",
+            "Aperture area",
+            "Counts at telescope",
+            "System transmission",
+            "Counts at detector",
+            "RMS Read noise",
+            "Dark current",
+            "Total integrated signal",
+            "Total noise",
+            "Peak signal",
+            "Strehl",
+            # "Seeing",
+            # "r0",
+            # "L0",
+            # "FWHM",
+            "Aperture radius",
+            "Aperture sum",
+            "Aperture noise",
+            "Aperture S/N",
+            "Suggested exptime",
+        ]
+        vals = [
+            f"{mag:4.02f}",
+            f"{color_corr:4.02f}",
+            f"{ext_coeff:4.02f}",
+            f"{total_ext:4.02f}",
+            f"{obs_mag:4.02f}",
+            f"{zp:4.02f}",
+            f"{area.to(u.m**2).value:4.02f}",
+            f"{synphot_counts:4.02e}",
+            f"{inst_counts / synphot_counts:4.03f}",
+            f"{inst_counts:4.02e}",
+            f"{rn:4.02f}",
+            f"{dc:3.01e}",
+            f"{total_signal:3.01e}",
+            f"{total_noise:3.01e}",
+            f"{peak_signal:3.01e}",
+            f"{np.clip(strehl, 0, 1):3.02f}",
+            # f"{seeing:3.02f}",
+            # f"{r0 * 1e2:3.01f}",
+            # f"{L0:3.01f}",
+            # f"{fwhm * 1e3:3.02f}",
+            f"{aper_rad_px:3.0f}",
+            f"{aper_sum[0] / 0.95:3.01e}",
+            f"{aper_sum_err[0]:3.01e}",
+            f"{snr:6.0f}",
+            f"{suggested_exptime:3.01e}",
+        ]
+        units = [
+            "mag",
+            f"mag ({inst_filt} - {srcfilt})",
+            "mag / airmass",
+            "mag",
+            "mag",
+            "mag",
+            "m^2",
+            "photon / s",
+            "e- / photon",
+            "e- / s",
+            "e- / px",
+            "e- / s / px",
+            "e-",
+            "e- / px",
+            f"e-{' SATURATING!' if saturating else ''}",
+            "",
+            # '"',
+            # "cm",
+            # "m",
+            # "mas",
+            "px",
+            "e-",
+            "e-",
+            "",
+            "s",
+        ]
+        tbl = pd.DataFrame(dict(Name=keys, Value=vals, Unit=units))
 
-    fig = px.imshow(np.log10(noisy_psf_adu), origin="lower", color_continuous_scale="inferno")
+        noisy_psf_adu = inst.convert_data(noisy_psf)
 
-    return results, fig
+        fig = px.imshow(
+            np.log10(noisy_psf_adu),
+            origin="lower",
+            aspect="equal",
+            color_continuous_scale="cividis",
+        )
+        fig.update_layout(coloraxis_colorbar=dict(title=dict(text="log10(flux)", side="right")))
+        tbls.append(tbl)
+        figs.append(fig)
+
+    return tbls, figs
+
+
+def fried_param(lam, seeing, airmass):
+    return 0.1 / seeing * (lam / 500) ** 1.2 * airmass ** (-0.6)
+
+
+def Fkolb(diam=7.92, L0=46):
+    return 1 / (1 + 300 * diam / L0) - 1
+
+
+def Fatm(lam, seeing, airmass, L0=46):
+    fkolb = Fkolb(L0=L0)
+    r0 = fried_param(lam, seeing, airmass)
+    radicand = 1 + fkolb * 2.183 * (r0 / L0) ** 0.356
+    if radicand <= 0:
+        return 0
+    else:
+        return seeing * airmass**0.6 * (lam / 500) ** (-0.2) * np.sqrt(radicand)
+
+
+def Fiq(lam, seeing, airmass, L0=46):
+    fatm = Fatm(lam, seeing, airmass, L0=L0)
+    ftel = 1.028 * np.rad2deg(lam / 7.95e9) * 3600
+    return np.sqrt(fatm**2 + ftel**2)
+
+
+def app():
+    ## Preamble
+
+    st.set_page_config(page_title="SCExAO ETC", page_icon=":star:", layout="wide")
+
+    ## Body
+
+    area = None
+
+    st.title("SCExAO Exposure Time Calculator")
+
+    left_col, right_col = st.columns(2)
+    with left_col:
+        st.subheader("Target Parameters")
+
+        src_type = st.radio("Object type", ("Point Source", "Extended Object"), horizontal=True)
+        ll_col, lr_col = st.columns([0.3, 0.7])
+        obj_type = lr_col.radio("Class", TYPES, horizontal=True)
+        re_match = re.compile(f"[0-9]{obj_type}$")
+        sublist = list(filter(lambda f: re_match.search(f), PICKLES_MAP.keys()))
+        sp_type = ll_col.selectbox("Spectral Type", sublist)
+        match src_type:
+            case "Point Source":
+                cols = st.columns((0.2, 0.2, 0.6))
+                mag = cols[1].number_input("Mag", value=6)
+            case "Extended Object":
+                cols = st.columns((0.2, 0.2, 0.2, 0.4))
+                mag = cols[1].number_input("Mag / sq. arcsec", value=10)
+                area = cols[2].number_input("Area", value=1)
+        src_filt = cols[0].selectbox("Filter", FILTERS.keys(), list(FILTERS.keys()).index("V"))
+        mag_sys = cols[-1].radio("System", ("Vega", "AB"), horizontal=True)
+        airmass = st.slider("Airmass", 1.0, 3.0, step=0.1)
+        # seeing = st.slider("Seeing", 0.0, 3.0, 0.6, step=0.1)
+        strehl = st.slider("Strehl", 0.0, 1.0, 0.4, step=0.1)
+
+    with right_col:
+        st.subheader("Instrument Parameters")
+        inst = st.radio("Instrument", INSTRUMENTS.keys())
+        inst_obj = INSTRUMENTS[inst].input_options()
+        exptime = st.number_input("Exposure Time", value=0.1, min_value=7.2e-6, max_value=1800.0)
+    st.header("Results")
+
+    inst_filt = inst_obj.filters.keys()
+    tbls, psf_figs = calculate_results(
+        sptype=sp_type,
+        sourcetype=src_type,
+        mag=mag,
+        magsys=mag_sys,
+        srcfilt=src_filt,
+        inst=inst_obj,
+        exptime=exptime,
+        airmass=airmass,
+        # seeing=seeing,
+        strehl=strehl,
+        area=area,
+    )
+
+    left_col, right_col = st.columns([0.5, 0.5])
+    with left_col:
+        tabs = st.tabs(inst_filt)
+        for tab, tbl in zip(tabs, tbls):
+            tab.dataframe(tbl, use_container_width=True, hide_index=True, height=773)
+    with right_col:
+        # st.write(fig)
+        # with psf_tab:
+        tabs = st.tabs(inst_filt)
+        for tab, fig in zip(tabs, psf_figs):
+            tab.plotly_chart(fig, use_container_width=True)
+
+        fig = update_spectrum_plot(sp_type, mag, mag_sys, src_filt, inst, inst_filt)
+        st.plotly_chart(fig, use_container_width=False)
 
 
 def main():
-    app.run(debug=True, host="0.0.0.0", port=8000)
+    if st.runtime.exists():
+        app()
+    else:
+        sys.argv = ["streamlit", "run", str(Path(__file__).resolve())]
+        sys.exit(stcli.main())
 
 
 if __name__ == "__main__":

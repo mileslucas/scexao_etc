@@ -29,9 +29,8 @@ repository = "https://github.com/scexao-org/scexao_etc"
 
 [project.optional-dependencies]
 dev = [
-    "autoflake",
-    "black",
-    "isort"
+    "ruff",
+    "pre-commit"
 ]
 
 [project.scripts]
@@ -40,9 +39,25 @@ scexao_etc = "scexao_etc.app:main"
 [tool.setuptools.dynamic]
 version = {attr = "scexao_etc.__version__"}
 
-[tool.black]
+
+[tool.ruff.lint]
+# pycodestyle, pydocstyle, isort, pyupgrade, pylint, tidyimports, use-pathlib, numpy, errmsg
+select = ["E", "F", "B", "SIM", "I", "UP", "TID", "PTH", "NPY", "EM"]
+ignore = [
+    "E501", # line too long
+]
+
+[tool.ruff]
 line-length = 100
 
-[tool.isort]
-profile = "black"
-multi_line_output = 3
+[tool.ruff.format]
+skip-magic-trailing-comma = true
+
+[tool.ruff.lint.flake8-tidy-imports]
+ban-relative-imports = "parents"
+
+[tool.ruff.lint.isort]
+split-on-trailing-comma = false
+
+[tool.ruff.lint.pydocstyle]
+convention = "numpy"

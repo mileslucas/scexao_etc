@@ -1,15 +1,15 @@
-from pydantic import BaseModel, Field
-from typing import Literal, Annotated, ClassVar, Final, Optional
-from annotated_types import Interval, Gt, Ge, Lt, Le
-from dash import Dash, html, dcc, callback, Output, Input
 from pathlib import Path
-import pandas as pd
+from typing import Annotated, ClassVar, Literal, Optional
+
+import numpy as np
 import streamlit as st
+from annotated_types import Ge, Gt
+from pydantic import BaseModel
 
 from .filters import VAMP_FILTERS, VAMP_ZEROPOINTS
-import numpy as np
 
 BASE_DIR = Path("/Users/mileslucas/dev/websites/scexao_etc/data")
+
 
 class Instrument(BaseModel):
     readnoise: Annotated[float, Ge(0)]
@@ -18,26 +18,34 @@ class Instrument(BaseModel):
     filters: dict
     pxscale: float
     bias: float = 0
-    factor: float = 1
-
+    throughput: float = 1
 
     @property
     def pxarea(self):
         """pixel area in sq. arcsec"""
-        return (self.pxscale)**2
-    
+        return (self.pxscale) ** 2
+
     def convert_data(self, data, clip=True):
-        data_adu = (data / self.gain + self.bias)
+        data_adu = data * self.throughput / self.gain + self.bias
         return data_adu
-    
+
+
 class VAMPIRES(Instrument):
     nd_filt: Optional[Literal["ND10", "ND25"]]
-    dark_current: float = 3.6e-3 # e- / px / s 
-    pxscale: float = 6e-3 # arcsec / px
-    bias: float = 200 # adu
+    bs: Literal["OPEN", "PBS", "NPBS"]
+    dark_current: float = 3.6e-3  # e- / px / s
+    pxscale: float = 6e-3  # arcsec / px
+    bias: float = 200  # adu
 
     READNOISE: ClassVar[dict[str, float]] = {"FAST": 0.4, "SLOW": 0.2}
     GAIN: ClassVar[dict[str, float]] = {"FAST": 0.103, "SLOW": 0.105}
+    THROUGHPUTS: ClassVar[dict[str, float]] = {
+        "OPEN": 1,
+        "PBS": 0.7964 / 2,
+        "NPBS": 0.8931 / 2,
+        "ND10": 10**(-1.00),
+        "ND25": 10**(-2.33),
+    }
     FILTERS: ClassVar[list] = VAMP_FILTERS
     ZEROPOINTS: ClassVar[list] = VAMP_ZEROPOINTS
 
@@ -59,7 +67,14 @@ class VAMPIRES(Instrument):
                     case "SII":
                         inst_filt = sii_filts
         readout_mode = st.radio("Readout Mode", ("FAST", "SLOW"), horizontal=True)
-        use_bs = st.toggle("Use beamsplitter", True)
+        match st.selectbox("Beamsplitter", ("None", "Polarizing", "Non-polarizing")):
+            case "None":
+                bs = "OPEN"
+            case "Polarizing":
+                bs = "PBS"
+            case "Non-polarizing":
+                bs = "NPBS"
+        ave_through = cls.THROUGHPUTS[bs]
         match st.selectbox("ND Filter", ("None", "OD 1.0", "OD 2.5")):
             case "None":
                 nd_filt = None
@@ -67,14 +82,25 @@ class VAMPIRES(Instrument):
                 nd_filt = "ND10"
             case "OD 2.5":
                 nd_filt = "ND25"
+        if nd_filt is not None:
+            ave_through *= cls.THROUGHPUTS[nd_filt]
+
         filts = {k: cls.FILTERS[k] for k in sorted(inst_filt)}
-        return cls(readnoise=cls.READNOISE[readout_mode], gain=cls.GAIN[readout_mode], filters=filts, nd_filt=nd_filt, factor=0.5 if use_bs else 1)
+        return cls(
+            readnoise=cls.READNOISE[readout_mode],
+            gain=cls.GAIN[readout_mode],
+            filters=filts,
+            bs=bs,
+            nd_filt=nd_filt,
+            throughput=ave_through,
+        )
 
     def convert_data(self, data, clip=True):
+
         data_adu = super().convert_data(data)
         if clip:
             return np.where(data_adu > 2**16 - 1, np.nan, data_adu).astype("f4")
-    
+
         return data_adu
 
 

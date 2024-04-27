@@ -1,8 +1,9 @@
-from astropy.io import fits
-from synphot import SourceSpectrum, Empirical1D, SpectralElement, Observation
-from synphot.units import VEGAMAG
-import astropy.units as u
 from pathlib import Path
+
+import astropy.units as u
+from astropy.io import fits
+from synphot import Empirical1D, Observation, SourceSpectrum, SpectralElement
+from synphot.units import VEGAMAG
 
 BASE_DIR = Path("/Users/mileslucas/dev/python/scexao_etc/data/pickles_uvk")
 TYPES = ("V", "IV", "III", "II", "I")
@@ -32,4 +33,4 @@ def load_pickles(spec_type):
 def color_correction(model, filt1: SpectralElement, filt2: SpectralElement):
     obs1 = Observation(model, filt1)
     obs2 = Observation(model, filt2)
-    return obs2.effstim(VEGAMAG, vegaspec=VEGASPEC) - obs1.effstim(VEGAMAG, vegaspec=VEGASPEC)
+    return obs1.effstim(VEGAMAG, vegaspec=VEGASPEC) - obs2.effstim(VEGAMAG, vegaspec=VEGASPEC)
